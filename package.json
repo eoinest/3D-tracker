@@ -1,0 +1,25 @@
+{
+  "name": "3d-tracker",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Head-tracked off-axis projection viewer — turns your screen into a window.",
+  "scripts": {
+    "sync:vendor": "node scripts/sync-vendor-assets.mjs",
+    "dev": "npm run sync:vendor && vite",
+    "build": "npm run sync:vendor && tsc --noEmit && npm test && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test \"test/**/*.test.ts\""
+  },
+  "dependencies": {
+    "@mediapipe/tasks-vision": "^1.0.1",
+    "three": "^0.185.1"
+  },
+  "devDependencies": {
+    "@types/node": "^26.2.0",
+    "@types/three": "^0.185.4",
+    "typescript": "^5.9.0",
+    "vite": "^7.0.2"
+  }
+}

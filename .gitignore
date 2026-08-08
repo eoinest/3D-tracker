@@ -1,0 +1,21 @@
+node_modules/
+dist/
+dist-ssr/
+*.local
+
+# Vendored at build time by scripts/sync-vendor-assets.mjs — never edit by hand.
+public/mediapipe/wasm/
+
+# Optional self-hosted face model (see README). Too large to track.
+public/mediapipe/*.task
+
+# Tooling / editor
+.vite/
+.playwright-cli/
+output/
+.DS_Store
+.idea/
+.vscode/*
+!.vscode/extensions.json
+*.log
+npm-debug.log*

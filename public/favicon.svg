@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#4cc9f0" />
+      <stop offset="1" stop-color="#7209b7" />
+    </linearGradient>
+  </defs>
+  <rect width="64" height="64" rx="14" fill="#080d16" />
+  <!-- Nested frames: the window, receding. -->
+  <rect x="8" y="12" width="48" height="40" rx="4" fill="none" stroke="url(#g)" stroke-width="3" />
+  <rect x="17" y="19" width="30" height="26" rx="3" fill="none" stroke="#4cc9f0" stroke-width="2" opacity="0.65" />
+  <rect x="25" y="25" width="14" height="14" rx="2" fill="none" stroke="#4cc9f0" stroke-width="1.5" opacity="0.4" />
+  <!-- Off-axis: the vanishing point sits left of centre. -->
+  <circle cx="26" cy="32" r="2.5" fill="#ffd166" />
+</svg>

@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="color-scheme" content="dark" />
+    <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
+    <meta
+      name="description"
+      content="Head-tracked off-axis projection: turn your screen into a window into another place."
+    />
+    <title>3D Tracker — your screen as a window</title>
+  </head>
+  <body class="is-booting">
+    <div id="app">
+      <canvas id="view"></canvas>
+
+      <button
+        id="panel-toggle"
+        type="button"
+        title="Hide controls (H)"
+        aria-controls="panel"
+        aria-expanded="true"
+      >
+        <span class="bar"></span>
+        <span class="bar"></span>
+        <span class="bar"></span>
+      </button>
+
+      <div class="drop-veil" aria-hidden="true">
+        <div class="drop-veil-inner">Drop a model to load it</div>
+      </div>
+    </div>
+
+    <noscript>
+      <p style="color: #cbd5e1; font: 16px system-ui; padding: 2rem">
+        This viewer needs JavaScript and WebGL.
+      </p>
+    </noscript>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

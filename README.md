@@ -1,5 +1,7 @@
 # 3D Tracker
 
+**[Try it →](https://3d-tracker-ten.vercel.app)** (needs a webcam; works in pointer mode without one)
+
 Your webcam watches where your head is. The renderer moves the camera to match and shears
 its frustum to stay pinned to the edges of your display. The result is that the screen
 stops behaving like a picture of a scene and starts behaving like a hole in the wall —
@@ -203,6 +205,19 @@ and runs automatically before `dev` and `build`. It exists because
 `FilesetResolver.forVisionTasks()` takes a runtime URL the bundler never sees, so the wasm
 has to be served as a static asset — and pinning it to the installed package version avoids
 the failure mode where bundled JS and CDN wasm drift apart between releases.
+
+## Deploying
+
+Hosted on Vercel. `vercel.json` sets the framework, the build command and explicit
+`application/wasm` headers for the MediaPipe runtime; `engines.node` pins Node 24 so the
+build can run the TypeScript tests with native type stripping.
+
+```
+vercel --prod
+```
+
+`npm run build` — and therefore every deploy — runs typecheck and tests first, so a broken
+projection can't ship.
 
 ## Requirements
 

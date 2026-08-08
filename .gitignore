@@ -11,6 +11,7 @@ public/mediapipe/*.task
 
 # Tooling / editor
 .vite/
+.vercel/
 .playwright-cli/
 output/
 .DS_Store

@@ -51,7 +51,7 @@ export class Viewer {
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2))
     this.renderer.outputColorSpace = SRGBColorSpace
     this.renderer.toneMapping = ACESFilmicToneMapping
-    this.renderer.toneMappingExposure = 1.05
+    this.renderer.toneMappingExposure = BASE_EXPOSURE
     this.renderer.shadowMap.enabled = true
     // PCFSoftShadowMap was deprecated in r185 and silently downgrades to this.
     this.renderer.shadowMap.type = PCFShadowMap
@@ -64,7 +64,7 @@ export class Viewer {
     const pmrem = new PMREMGenerator(this.renderer)
     this.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture
     this.scene.environment = this.environment
-    this.scene.environmentIntensity = 0.45
+    this.scene.environmentIntensity = BASE_ENV_INTENSITY
     pmrem.dispose()
 
     this.camera = new PerspectiveCamera(50, 1, settings.nearM, settings.farM)
@@ -96,6 +96,13 @@ export class Viewer {
     this.definition = definition
     this.instance = definition.create(this.context)
     this.scene.add(this.instance.root)
+
+    // Fog, exposure and environment strength belong to the Scene and the
+    // renderer rather than to any object, so they're applied here and reset
+    // for scenes that don't ask for them.
+    this.scene.fog = this.instance.fog ?? null
+    this.scene.environmentIntensity = this.instance.environmentIntensity ?? BASE_ENV_INTENSITY
+    this.renderer.toneMappingExposure = this.instance.exposure ?? BASE_EXPOSURE
   }
 
   /** Forward a key event to the active scene. Returns true if it was consumed. */
@@ -155,7 +162,10 @@ export class Viewer {
       centerXM: geometry.windowCenterXM,
       centerYM: geometry.windowCenterYM,
     }
-    applyOffAxisCamera(this.camera, this.eye, rect, settings.nearM, settings.farM)
+    // A scene may need to see further than the user's setting allows; take
+    // whichever is greater rather than letting a landscape clip at 60m.
+    const far = Math.max(settings.farM, this.definition?.minFarM ?? 0)
+    applyOffAxisCamera(this.camera, this.eye, rect, settings.nearM, far)
 
     this.renderer.render(this.scene, this.camera)
   }
@@ -173,3 +183,6 @@ export class Viewer {
 
 const EMPTY_PLANES: Plane[] = []
 const sizeScratch = new Vector2()
+
+const BASE_EXPOSURE = 1.05
+const BASE_ENV_INTENSITY = 0.45

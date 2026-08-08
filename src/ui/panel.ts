@@ -269,7 +269,11 @@ export class ControlPanel {
         format: (v) => `${v.toFixed(2)}×`,
       }),
       c.toggle({ key: 'autoRotate', label: 'Auto-rotate model' }),
-      c.toggle({ key: 'showRoom', label: 'Show room walls' }),
+      c.toggle({
+        key: 'showRoom',
+        label: 'Show frame & walls',
+        hint: 'The window reveal and room walls. Turning them off costs you most of the near-field parallax.',
+      }),
     )
   }
 

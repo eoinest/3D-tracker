@@ -1,4 +1,4 @@
-import type { Object3D, WebGLRenderer } from 'three'
+import type { Fog, FogExp2, Object3D, WebGLRenderer } from 'three'
 
 import type { Settings } from '../core/settings'
 
@@ -22,6 +22,15 @@ export interface SceneContext {
 
 export interface SceneInstance {
   root: Object3D
+  /**
+   * Scene-wide fog. Outdoor scenes need it for aerial perspective, and it is a
+   * property of the Scene rather than of any object, so the viewer applies it.
+   */
+  fog?: Fog | FogExp2
+  /** Tone-mapping exposure. The physical sky needs far less than an interior. */
+  exposure?: number
+  /** How much the default room IBL should contribute, 0–1. */
+  environmentIntensity?: number
   /** Per-frame animation. `dt` and `elapsed` are seconds. */
   update?(dt: number, elapsed: number, ctx: SceneContext): void
   /** Called when the window's physical size or the room depth changes. */
@@ -39,5 +48,11 @@ export interface SceneDefinition {
   badge?: string
   /** Set for entries that are really "a model on a pedestal". */
   kind: 'world' | 'model'
+  /**
+   * Minimum far plane this scene needs, in metres. Raises the user's setting
+   * without overriding it — a landscape reaching the horizon simply cannot be
+   * drawn inside the 60m that suits an interior.
+   */
+  minFarM?: number
   create(ctx: SceneContext): SceneInstance
 }

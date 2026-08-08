@@ -103,13 +103,43 @@ Two more things affect accuracy:
 
 ## Scenes
 
+**Places** — real-scale outdoor worlds, seen through a hole in a wall:
+
 | | |
 | --- | --- |
-| **Portal Room** | A lit box behind the glass with objects scattered through its depth. The reference demo. |
+| **Meadow** | A grass field under an open sky, with wind through the blades. |
+| **Shoreline** | Open water to the horizon, with the sun on the swell. |
+| **Pine Ridge** | Conifers fading into morning mist. |
+
+**Worlds** — constructed or abstract, filling the aperture directly:
+
+| | |
+| --- | --- |
+| **Portal Room** | A lit box behind the glass with objects scattered through its depth. |
 | **Infinite Tunnel** | Concentric frames rushing past. Doubles as the calibration target. |
 | **Top-Down Arena** | A game level as a tilted diorama. **WASD** to drive. |
 | **Star Field** | Pure parallax — no occlusion, no shading, no familiar objects. If depth reads here, the tracking is doing real work. |
 | **Sample models** | Procedural objects on a pedestal, for checking the model viewer without uploading anything. |
+
+### Why the places are built the way they are
+
+They're rendered at **true scale** — grass in centimetres, treeline at a hundred metres,
+aperture 30cm of hole half a metre from your eye. That is the difference between "a window
+onto somewhere" and "a small model of somewhere", and it has a consequence worth knowing:
+almost all the parallax comes from *near* geometry. Distant hills barely shift when you
+lean, exactly as they don't at a real window.
+
+Which is why each of the three earns its depth differently. The meadow uses near geometry —
+blades a few metres out sweeping across the field behind them. Pine Ridge uses occlusion —
+trunks at every distance sliding across each other. The shore has neither, so it leans on
+the swell: waves large near the shore and shrinking to nothing at the horizon, a texture
+gradient your visual system reads as distance without being told.
+
+The single most valuable object in all three is the **window reveal** — the 8cm of wall
+thickness around the opening, four quads. A bare aperture reads as a screen showing a
+landscape. Give the opening some depth and lean, and the near jamb slides across the far
+one the way a real window does. You can turn it off under **View → Show frame & walls**; it
+is worth doing once, to see how much of the effect it was carrying.
 
 ### Why the arena is the interesting one
 
@@ -185,7 +215,13 @@ src/
     viewer.ts        renderer, scene lifecycle, off-axis camera
     modelLoader.ts   multi-file model loading
     settings.ts      persisted state
-  scenes/            the worlds, plus the pedestal showcase used for uploads
+  scenes/
+    outdoorKit.ts    sky, LOD ground, instanced grass, prop scattering
+    reveal.ts        the window's wall thickness — the near-parallax anchor
+    noise.ts         value noise / fBm, shared by terrain and placement
+    meadow.ts shore.ts pineRidge.ts        real-scale places
+    portalRoom.ts tunnel.ts arena.ts starfield.ts   constructed worlds
+    showcase.ts      pedestal scene used for uploads and sample models
   ui/                panel, controls, debug overlay (no framework)
 test/                node --test, no test runner dependency
 ```

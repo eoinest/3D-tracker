@@ -5,7 +5,7 @@ import { loadModelFromFiles, type LoadedModel } from './core/modelLoader'
 import { computeDisplayGeometry, physicalScreenSize, type DisplayGeometry } from './core/screen'
 import { SettingsStore, type Settings } from './core/settings'
 import { Viewer } from './core/viewer'
-import { BUILT_IN_SCENES, findScene, uploadScene } from './scenes'
+import { BUILT_IN_SCENES, findScene, PLACE_SCENES, uploadScene } from './scenes'
 import type { SceneDefinition } from './scenes/types'
 import { DebugOverlay } from './ui/debugOverlay'
 import { ControlPanel, type LibraryEntry } from './ui/panel'
@@ -107,12 +107,17 @@ function resolveEye(geometry: DisplayGeometry, nowMs: number): { x: number; y: n
 // ── Scene library ────────────────────────────────────────────────────────────
 
 function libraryEntries(): LibraryEntry[] {
+  const places = new Set(PLACE_SCENES.map((scene) => scene.id))
   const entries: LibraryEntry[] = BUILT_IN_SCENES.map((scene) => ({
     id: scene.id,
     name: scene.name,
     description: scene.description,
     badge: scene.badge,
-    group: scene.kind === 'world' ? 'Worlds' : 'Sample models',
+    group: places.has(scene.id)
+      ? 'Places'
+      : scene.kind === 'world'
+        ? 'Worlds'
+        : 'Sample models',
   }))
 
   for (const [id, upload] of uploads) {

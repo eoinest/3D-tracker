@@ -4,6 +4,10 @@
   "version": "0.1.0",
   "type": "module",
   "description": "Head-tracked off-axis projection viewer — turns your screen into a window.",
+  "engines": {
+    "//": "24.x for native TypeScript stripping — `npm test` runs .ts files under node --test with no transpile step.",
+    "node": "24.x"
+  },
   "scripts": {
     "sync:vendor": "node scripts/sync-vendor-assets.mjs",
     "dev": "npm run sync:vendor && vite",

@@ -1,4 +1,4 @@
-import { Euler, Group, MathUtils, Matrix4, Quaternion, Vector3 } from 'three'
+import { Euler, Group, HemisphereLight, MathUtils, Matrix4, Quaternion, Vector3 } from 'three'
 import type { SplatMesh } from '@sparkjsdev/spark'
 
 import { ensureSparkRenderer } from '../core/splatRuntime'
@@ -133,6 +133,13 @@ function createSplatPlace(meta: SplatPlaceMeta, ctx: SceneContext): SceneInstanc
   const reveal = createWindowReveal({ depthM: 0.085, color: 0xd8d2c6, sillColor: 0xb0a695 })
   reveal.layout(ctx)
   root.add(reveal.group)
+
+  // The reveal needs its own light. Splats carry baked lighting and ignore the
+  // scene's lights completely, so this scene switches the room IBL off to stop
+  // it washing the capture out — which leaves the reveal, an ordinary lit
+  // material, with no illumination at all. Without this it renders pure black
+  // and reads as a broken viewport rather than as a window frame.
+  root.add(new HemisphereLight(0xdfe8f2, 0x50565e, 2.2))
 
   notify({
     state: 'loading',

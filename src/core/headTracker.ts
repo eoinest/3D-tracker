@@ -124,17 +124,7 @@ export class HeadTracker {
         )
       }
 
-      this.stream = await navigator.mediaDevices.getUserMedia({
-        audio: false,
-        video: {
-          facingMode: 'user',
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
-          // A faster camera is the cheapest latency win available: 60fps halves
-          // the worst-case wait for a fresh frame compared with 30.
-          frameRate: { ideal: 60, min: 24 },
-        },
-      })
+      this.stream = await openCamera()
       this.video.srcObject = this.stream
       await this.video.play()
 
@@ -379,6 +369,49 @@ export class HeadTracker {
   }
 }
 
+/**
+ * Opens the webcam, degrading the request until something works.
+ *
+ * Every entry here is expressed with `ideal`, never `min`/`max`. A range
+ * constraint is a *hard* requirement: ask for `frameRate: { min: 24 }` and any
+ * camera that won't promise 24fps at the requested resolution fails the whole
+ * call with OverconstrainedError rather than giving you a slower stream. That
+ * is a fine bargain on the machine you developed on and a total failure to
+ * start anywhere else, so the preference is expressed as `ideal` and backed by
+ * a fallback chain.
+ */
+async function openCamera(): Promise<MediaStream> {
+  const attempts: MediaStreamConstraints[] = [
+    // Higher resolution buys iris precision; 60fps halves the worst-case wait
+    // for a fresh frame. Both are preferences, not requirements.
+    {
+      audio: false,
+      video: {
+        facingMode: 'user',
+        width: { ideal: 1280 },
+        height: { ideal: 720 },
+        frameRate: { ideal: 60 },
+      },
+    },
+    { audio: false, video: { facingMode: 'user' } },
+    { audio: false, video: true },
+  ]
+
+  let lastError: unknown
+  for (const constraints of attempts) {
+    try {
+      return await navigator.mediaDevices.getUserMedia(constraints)
+    } catch (err) {
+      lastError = err
+      // A denial or a missing camera won't be fixed by asking for less.
+      if (err instanceof DOMException && (err.name === 'NotAllowedError' || err.name === 'NotFoundError')) {
+        throw err
+      }
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error('Could not open the camera.')
+}
+
 async function createLandmarker(delegate: Settings['delegate']): Promise<FaceLandmarker> {
   const wasmRoot = `${import.meta.env.BASE_URL}mediapipe/wasm`
   const fileset = await FilesetResolver.forVisionTasks(wasmRoot)
@@ -441,8 +474,11 @@ function describeError(err: unknown): string {
         return 'No camera found on this device.'
       case 'NotReadableError':
         return 'The camera is already in use by another app.'
+      case 'OverconstrainedError':
+        // Carries an empty message, so say something useful instead.
+        return 'This camera could not provide a usable video mode.'
       default:
-        return `${err.name}: ${err.message}`
+        return err.message ? `${err.name}: ${err.message}` : err.name
     }
   }
   return err instanceof Error ? err.message : String(err)

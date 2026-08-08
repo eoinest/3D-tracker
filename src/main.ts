@@ -69,6 +69,13 @@ const pointer = { x: 0, y: 0, z: NOMINAL_DISTANCE_M, seen: false }
 let lastSample: HeadSample | null = null
 
 window.addEventListener('pointermove', (event) => {
+  // Ignore the panel and the debug overlay. They sit at the edges of the
+  // screen, so reaching for a slider would otherwise fling the virtual viewer
+  // into the far corner — every adjustment you make would swing the scene
+  // while you were trying to judge the effect of it.
+  const target = event.target as HTMLElement | null
+  if (target?.closest('.panel, .debug, #panel-toggle')) return
+
   const { widthM, heightM } = physicalScreenSize(settings)
   pointer.x = (event.clientX / window.innerWidth - 0.5) * widthM * 1.4
   pointer.y = (0.5 - event.clientY / window.innerHeight) * heightM * 1.4

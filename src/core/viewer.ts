@@ -17,6 +17,7 @@ import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js'
 import { applyOffAxisCamera, type WindowRect } from './offAxis'
 import type { DisplayGeometry } from './screen'
 import type { Settings } from './settings'
+import { registerSplatHost } from './splatRuntime'
 import type { SceneContext, SceneDefinition, SceneInstance } from '../scenes/types'
 
 /**
@@ -70,6 +71,14 @@ export class Viewer {
     this.camera = new PerspectiveCamera(50, 1, settings.nearM, settings.farM)
     this.camera.matrixAutoUpdate = false
     this.scene.add(this.camera)
+
+    // Gaussian splat support is loaded on demand — see splatRuntime.ts. Spark
+    // derives its splat footprint from projectionMatrix[0][0] / [1][1] rather
+    // than from camera.fov, which is exactly what an off-axis frustum needs:
+    // the shear lives in the matrix's third column and leaves those focal
+    // terms untouched, so splats render correctly under head tracking with no
+    // special handling.
+    registerSplatHost(this.renderer, this.scene)
 
     this.context = {
       windowWidthM: 0.3,

@@ -836,3 +836,57 @@ kbd {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* ── Splat status / attribution ────────────────────────────────────────── */
+
+.splat-status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  align-items: baseline;
+  margin-top: 8px;
+  padding: 7px 9px;
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.04);
+  font-size: 10.5px;
+  color: var(--text-faint);
+}
+
+.splat-status[hidden] {
+  display: none;
+}
+
+.splat-status a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.splat-status a:hover {
+  text-decoration: underline;
+}
+
+.splat-loading {
+  color: var(--accent);
+}
+
+.splat-error {
+  color: var(--danger);
+}
+
+input[type='url'],
+.ctl-text {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 8px;
+  border-radius: 6px;
+  border: 1px solid rgba(140, 170, 210, 0.2);
+  background: rgba(0, 0, 0, 0.28);
+  color: var(--text);
+  font: inherit;
+  font-size: 11.5px;
+}
+
+input[type='url']:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}

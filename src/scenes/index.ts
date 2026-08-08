@@ -2,11 +2,9 @@ import type { Object3D } from 'three'
 
 import { arenaScene } from './arena'
 import { BUILT_IN_MODELS } from './builtinModels'
-import { meadowScene } from './meadow'
-import { pineRidgeScene } from './pineRidge'
+import { PLACE_SCENES } from './places'
 import { portalRoomScene } from './portalRoom'
 import { createShowcase, type ShowcaseOptions } from './showcase'
-import { shoreScene } from './shore'
 import { starfieldScene } from './starfield'
 import { tunnelScene } from './tunnel'
 import type { SceneDefinition } from './types'
@@ -14,8 +12,7 @@ import type { SceneDefinition } from './types'
 export { createShowcase } from './showcase'
 export type { SceneContext, SceneDefinition, SceneInstance } from './types'
 
-/** Real-scale places, viewed through a hole in a wall. */
-export const PLACE_SCENES: readonly SceneDefinition[] = [meadowScene, shoreScene, pineRidgeScene]
+export { PLACE_SCENES, PLACE_CAPTURES, customSplatScene, findCapture } from './places'
 
 /** Abstract or constructed worlds that fill the aperture directly. */
 export const WORLD_SCENES: readonly SceneDefinition[] = [

@@ -19,6 +19,7 @@ export interface PanelCallbacks {
   onStartCamera(): void
   onStopCamera(): void
   onFiles(files: File[]): void
+  onSplatUrl(url: string): void
   onRemove(id: string): void
   onCalibrate(distanceCm: number): void
   onReset(): void
@@ -56,6 +57,7 @@ export class ControlPanel {
   private readonly cameraButton: HTMLButtonElement
   private readonly screenReadout: HTMLElement
   private readonly calibrateInput: HTMLInputElement
+  private readonly splatStatusLine: HTMLElement
   private entries: LibraryEntry[] = []
   private activeId: string | null = null
   private readonly items = new Map<string, { row: HTMLElement; pick: HTMLElement }>()
@@ -77,6 +79,7 @@ export class ControlPanel {
     this.libraryList = h('div', { class: 'library' })
     this.screenReadout = h('small', { class: 'ctl-hint' })
     this.toasts = h('div', { class: 'toasts' })
+    this.splatStatusLine = h('div', { class: 'splat-status', hidden: true })
     this.calibrateInput = h('input', {
       type: 'number',
       class: 'ctl-number',
@@ -95,6 +98,7 @@ export class ControlPanel {
         { class: 'panel-scroll' },
         this.librarySection(),
         this.viewSection(),
+        this.placementSection(),
         this.trackingSection(),
         this.calibrationSection(),
         this.debugSection(),
@@ -144,6 +148,48 @@ export class ControlPanel {
     this.cameraButton.textContent =
       status.state === 'running' || status.state === 'starting' ? 'Stop camera' : 'Start camera'
     this.cameraButton.disabled = status.state === 'starting'
+  }
+
+  /**
+   * Loading progress and credit for the active capture. These are other
+   * people's scans; the attribution is not optional decoration.
+   */
+  setSplatStatus(status: {
+    state: 'loading' | 'ready' | 'error'
+    progress: number | null
+    error: string | null
+    splatCount: number
+    credit: string | null
+    creditUrl: string | null
+  }): void {
+    const show = status.credit !== null
+    this.splatStatusLine.hidden = !show
+    if (!show) return
+
+    const parts: (Node | string)[] = []
+    if (status.state === 'loading') {
+      const pct = status.progress === null ? '' : ` ${Math.round(status.progress * 100)}%`
+      parts.push(h('span', { class: 'splat-loading' }, `Loading capture${pct}…`))
+    } else if (status.state === 'error') {
+      parts.push(h('span', { class: 'splat-error' }, status.error ?? 'Capture failed to load.'))
+    } else if (status.splatCount) {
+      parts.push(
+        h('span', {}, `${(status.splatCount / 1000).toFixed(0)}k splats`),
+      )
+    }
+
+    if (status.credit) {
+      parts.push(
+        status.creditUrl
+          ? h(
+              'a',
+              { href: status.creditUrl, target: '_blank', rel: 'noreferrer noopener' },
+              status.credit,
+            )
+          : h('span', {}, status.credit),
+      )
+    }
+    this.splatStatusLine.replaceChildren(...parts)
   }
 
   toast(message: string, kind: 'info' | 'error' | 'success' = 'info'): void {
@@ -228,12 +274,49 @@ export class ControlPanel {
       h('small', {}, '.glb .gltf .obj .fbx .stl .ply — include .bin and textures'),
     )
 
+    const urlInput = h('input', {
+      type: 'url',
+      class: 'ctl-text',
+      placeholder: 'https://…/capture.spz',
+      spellcheck: false,
+      onkeydown: (event: KeyboardEvent) => {
+        if (event.key === 'Enter') {
+          event.preventDefault()
+          submitUrl()
+        }
+      },
+    })
+
+    const submitUrl = (): void => {
+      const url = urlInput.value.trim()
+      if (!url) return
+      this.callbacks.onSplatUrl(url)
+      urlInput.value = ''
+    }
+
     return section(
       'Library',
       true,
       this.libraryList,
+      this.splatStatusLine,
       dropzone,
       fileInput,
+      h(
+        'div',
+        { class: 'ctl' },
+        h('span', { class: 'ctl-label' }, 'Load a capture by URL'),
+        h(
+          'div',
+          { class: 'row' },
+          urlInput,
+          h('button', { type: 'button', class: 'btn btn-small', onclick: submitUrl }, 'Load'),
+        ),
+        h(
+          'small',
+          { class: 'ctl-hint' },
+          'Any .spz, .ply, .splat or .ksplat Gaussian splat, served with CORS enabled.',
+        ),
+      ),
     )
   }
 
@@ -277,6 +360,74 @@ export class ControlPanel {
     )
   }
 
+  private placementSection(): HTMLElement {
+    const c = this.controls
+    return section(
+      'Placement',
+      false,
+      h(
+        'p',
+        { class: 'note' },
+        'Seats a captured place in the window. Scans carry no agreed scale or up-axis, so a pasted URL almost always needs these.',
+      ),
+      c.logSlider({
+        key: 'splatScale',
+        label: 'Scale',
+        min: 0.02,
+        max: 50,
+        format: (v) => (v >= 10 ? `${v.toFixed(1)}×` : `${v.toFixed(2)}×`),
+      }),
+      c.slider({
+        key: 'splatYawDeg',
+        label: 'Turn',
+        min: -180,
+        max: 180,
+        step: 1,
+        format: (v) => `${v.toFixed(0)}°`,
+      }),
+      c.slider({
+        key: 'splatPitchDeg',
+        label: 'Tilt',
+        min: -90,
+        max: 90,
+        step: 1,
+        format: (v) => `${v.toFixed(0)}°`,
+      }),
+      c.slider({
+        key: 'splatHeightM',
+        label: 'Height',
+        min: -8,
+        max: 8,
+        step: 0.05,
+        format: (v) => `${v.toFixed(2)} m`,
+      }),
+      c.slider({
+        key: 'splatDistanceM',
+        label: 'Distance',
+        min: -20,
+        max: 20,
+        step: 0.1,
+        format: (v) => `${v.toFixed(1)} m`,
+      }),
+      h(
+        'button',
+        {
+          type: 'button',
+          class: 'btn',
+          onclick: () =>
+            this.store.patch({
+              splatScale: 1,
+              splatYawDeg: 0,
+              splatPitchDeg: 0,
+              splatHeightM: 0,
+              splatDistanceM: 0,
+            }),
+        },
+        'Reset placement',
+      ),
+    )
+  }
+
   private trackingSection(): HTMLElement {
     const c = this.controls
     return section(
@@ -291,6 +442,24 @@ export class ControlPanel {
           { value: 'fixed', label: 'Fixed' },
         ],
         hint: 'Pointer mode fakes a viewer with the mouse — handy for demos and screenshots.',
+      }),
+      c.segmented({
+        key: 'poseSource',
+        label: 'Estimator',
+        choices: [
+          { value: 'matrix', label: 'Face mesh', title: 'Rigid fit of the whole face mesh' },
+          { value: 'iris', label: 'Iris', title: 'Back-project the two iris landmarks' },
+        ],
+        hint: 'Face mesh votes hundreds of landmarks into one pose and is much steadier. Iris uses two points and is easier to reason about.',
+      }),
+      c.slider({
+        key: 'predictMs',
+        label: 'Latency compensation',
+        min: 0,
+        max: 120,
+        step: 5,
+        format: (v) => (v === 0 ? 'off' : `${v.toFixed(0)} ms`),
+        hint: 'Extrapolates your head forward to cancel pipeline lag. Too much overshoots when you change direction.',
       }),
       c.slider({
         key: 'parallaxGain',
@@ -378,7 +547,15 @@ export class ControlPanel {
         hint: 'Distance from the top edge of the picture to the webcam lens.',
       }),
       c.number({ key: 'cameraOffsetXMm', label: 'Camera offset X', suffix: 'mm', step: 1 }),
-      c.number({ key: 'ipdMm', label: 'Your eye spacing', suffix: 'mm', min: 45, max: 80, step: 0.5 }),
+      c.number({
+        key: 'ipdMm',
+        label: 'Your eye spacing',
+        suffix: 'mm',
+        min: 45,
+        max: 80,
+        step: 0.5,
+        hint: 'Used by the iris estimator only.',
+      }),
       c.slider({
         key: 'focalNorm',
         label: 'Webcam focal length',
@@ -386,7 +563,7 @@ export class ControlPanel {
         max: 2,
         step: 0.005,
         format: (v) => v.toFixed(3),
-        hint: 'Sets the depth scale. Use the measurement below instead of guessing.',
+        hint: 'Iris estimator only. Use the measurement below rather than guessing.',
       }),
       h(
         'div',
@@ -407,7 +584,11 @@ export class ControlPanel {
             'Set',
           ),
         ),
-        h('small', { class: 'ctl-hint' }, 'Sit at that exact distance with the camera running, then press Set.'),
+        h(
+          'small',
+          { class: 'ctl-hint' },
+          'Sit at that exact distance with the camera running, then press Set. This solves whichever single scale factor the active estimator needs.',
+        ),
       ),
       c.segmented({
         key: 'canvasPlacement',

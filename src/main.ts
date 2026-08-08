@@ -5,7 +5,8 @@ import { loadModelFromFiles, type LoadedModel } from './core/modelLoader'
 import { computeDisplayGeometry, physicalScreenSize, type DisplayGeometry } from './core/screen'
 import { SettingsStore, type Settings } from './core/settings'
 import { Viewer } from './core/viewer'
-import { BUILT_IN_SCENES, findScene, PLACE_SCENES, uploadScene } from './scenes'
+import { BUILT_IN_SCENES, customSplatScene, findScene, PLACE_SCENES, uploadScene } from './scenes'
+import { splatStatus } from './scenes/splatPlace'
 import type { SceneDefinition } from './scenes/types'
 import { DebugOverlay } from './ui/debugOverlay'
 import { ControlPanel, type LibraryEntry } from './ui/panel'
@@ -18,6 +19,8 @@ import { filesFromDataTransfer } from './ui/dropFiles'
  * viewing distance instead of collapsing the world onto the glass.
  */
 const NOMINAL_DISTANCE_M = 0.55
+/** Where we land when the active scene disappears. */
+const FALLBACK_SCENE_ID = 'portal-room'
 const MIN_DISTANCE_M = 0.15
 const MAX_DISTANCE_M = 3
 
@@ -32,13 +35,19 @@ const tracker = new HeadTracker()
 document.body.appendChild(tracker.video)
 
 const overlay = new DebugOverlay()
-const uploads = new Map<string, { model: LoadedModel; definition: SceneDefinition }>()
+/** Whatever the user has added this session: meshes or splat captures. */
+type UserEntry =
+  | { kind: 'model'; definition: SceneDefinition; model: LoadedModel }
+  | { kind: 'splat'; definition: SceneDefinition; objectUrl: string | null }
+
+const uploads = new Map<string, UserEntry>()
 
 const panel = new ControlPanel(store, {
   onSelect: selectScene,
   onStartCamera: startCamera,
   onStopCamera: stopCamera,
   onFiles: (files) => void ingestFiles(files),
+  onSplatUrl: (url) => loadSplatUrl(url),
   onRemove: removeUpload,
   onCalibrate: calibrate,
   onReset: () => {
@@ -81,7 +90,11 @@ function resolveEye(geometry: DisplayGeometry, nowMs: number): { x: number; y: n
   let raw = { x: 0, y: 0, z: NOMINAL_DISTANCE_M }
 
   if (settings.headSource === 'camera') {
-    lastSample = tracker.update(settings, geometry, nowMs)
+    // Detection is driven by the camera's own frame callback, so here we only
+    // read the newest pose and let the tracker extrapolate it to `nowMs`.
+    tracker.settings = settings
+    tracker.geometry = geometry
+    lastSample = tracker.currentSample(nowMs, settings)
     if (lastSample) {
       raw = { x: lastSample.x, y: lastSample.y, z: lastSample.z }
     } else if (pointer.seen) {
@@ -125,7 +138,8 @@ function libraryEntries(): LibraryEntry[] {
       id,
       name: upload.definition.name,
       description: upload.definition.description,
-      group: 'Your uploads',
+      badge: upload.definition.badge,
+      group: 'Your captures & models',
       removable: true,
     })
   }
@@ -153,8 +167,58 @@ function selectScene(id: string): void {
 
 let uploadCounter = 0
 
+const SPLAT_EXTENSIONS = ['spz', 'ply', 'splat', 'ksplat']
+
+function isSplatFile(name: string): boolean {
+  return SPLAT_EXTENSIONS.includes((name.split('.').pop() ?? '').toLowerCase())
+}
+
+/**
+ * Registers a capture and shows it.
+ *
+ * `.ply` is ambiguous — it is both a mesh format and the uncompressed Gaussian
+ * splat format — so a dropped .ply only takes this path when it arrives with
+ * other splat files or the user pastes it as a URL. A lone .ply still goes to
+ * the mesh loader, which is overwhelmingly what people mean by one.
+ */
+function registerSplat(url: string, name: string, objectUrl: string | null = null): void {
+  const id = `splat:${++uploadCounter}`
+  const definition = customSplatScene({ id, name, url })
+  uploads.set(id, { kind: 'splat', definition, objectUrl })
+  refreshLibrary()
+  selectScene(id)
+}
+
+function loadSplatUrl(raw: string): void {
+  let url: URL
+  try {
+    url = new URL(raw, window.location.href)
+  } catch {
+    panel.toast('That does not look like a URL.', 'error')
+    return
+  }
+  if (url.protocol !== 'https:' && url.protocol !== 'http:' && url.protocol !== 'blob:') {
+    panel.toast('Only http(s) URLs can be loaded.', 'error')
+    return
+  }
+  const name = decodeURIComponent(url.pathname.split('/').pop() ?? 'Capture').replace(/\.[^.]+$/, '')
+  registerSplat(url.href, name || 'Capture')
+}
+
 async function ingestFiles(files: File[]): Promise<void> {
   if (!files.length) return
+
+  // A Gaussian splat capture and a polygon mesh both arrive as files but need
+  // completely different loaders, so route on extension before doing anything.
+  const splat = files.find((file) => isSplatFile(file.name))
+  const onlyPly = files.length === 1 && splat?.name.toLowerCase().endsWith('.ply')
+  if (splat && !onlyPly) {
+    const objectUrl = URL.createObjectURL(splat)
+    registerSplat(objectUrl, splat.name.replace(/\.[^.]+$/, ''), objectUrl)
+    panel.toast(`Loading ${splat.name}…`)
+    return
+  }
+
   panel.toast(`Loading ${files.length} file${files.length > 1 ? 's' : ''}…`)
   try {
     const model = await loadModelFromFiles(files, viewer.renderer)
@@ -168,7 +232,7 @@ async function ingestFiles(files: File[]): Promise<void> {
       },
       model.object,
     )
-    uploads.set(id, { model, definition })
+    uploads.set(id, { kind: 'model', model, definition })
     refreshLibrary()
     selectScene(id)
     panel.toast(`Loaded ${definition.name}.`, 'success')
@@ -182,10 +246,14 @@ function removeUpload(id: string): void {
   const upload = uploads.get(id)
   if (!upload) return
 
-  if (viewer.activeSceneId === id) selectScene('portal-room')
+  if (viewer.activeSceneId === id) selectScene(FALLBACK_SCENE_ID)
   uploads.delete(id)
-  disposeObject(upload.model.object)
-  upload.model.release()
+  if (upload.kind === 'model') {
+    disposeObject(upload.model.object)
+    upload.model.release()
+  } else if (upload.objectUrl) {
+    URL.revokeObjectURL(upload.objectUrl)
+  }
   refreshLibrary()
 }
 
@@ -213,13 +281,18 @@ function calibrate(distanceCm: number): void {
     panel.toast('Enter the distance from your eyes to the screen, in centimetres.', 'error')
     return
   }
-  const focalNorm = tracker.calibrateFocalFromDistance(distanceCm / 100, settings)
-  if (focalNorm === null) {
+  const result = tracker.calibrate(distanceCm / 100, settings)
+  if (result === null) {
     panel.toast('Start the camera and make sure your face is detected first.', 'error')
     return
   }
-  store.set('focalNorm', clamp(focalNorm, 0.3, 3))
-  panel.toast(`Calibrated: focal length ${focalNorm.toFixed(3)}×width.`, 'success')
+  if (result.key === 'metersPerUnit') {
+    store.set('metersPerUnit', clamp(result.value, 0.001, 0.5))
+    panel.toast(`Calibrated head pose scale to ${result.value.toFixed(4)}.`, 'success')
+  } else {
+    store.set('focalNorm', clamp(result.value, 0.3, 3))
+    panel.toast(`Calibrated: focal length ${result.value.toFixed(3)}×width.`, 'success')
+  }
 }
 
 // ── Chrome ───────────────────────────────────────────────────────────────────
@@ -291,6 +364,10 @@ window.addEventListener('drop', (event) => {
   void filesFromDataTransfer(event.dataTransfer).then(ingestFiles)
 })
 
+// The active capture reports its own load progress and credit.
+splatStatus.onChange = () => panel.setSplatStatus(splatStatus.status)
+panel.setSplatStatus(splatStatus.status)
+
 store.subscribe((_values, changed) => {
   if (changed.has('showDebug')) overlay.setVisible(settings.showDebug)
   if (changed.has('delegate') && tracker.state === 'running') {
@@ -342,7 +419,7 @@ function frame(nowMs: number): void {
 // ── Boot ─────────────────────────────────────────────────────────────────────
 
 overlay.setVisible(settings.showDebug)
-selectScene(findScene(settings.sceneId) ? settings.sceneId : 'portal-room')
+selectScene(findScene(settings.sceneId) ? settings.sceneId : FALLBACK_SCENE_ID)
 refreshLibrary()
 requestAnimationFrame(frame)
 

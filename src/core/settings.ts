@@ -27,6 +27,18 @@ export interface Settings {
 
   // ── Head tracking ─────────────────────────────────────────────────────────
   headSource: HeadSource
+  /**
+   * Which estimator supplies head position.
+   *
+   * `matrix` fits the whole canonical face mesh (steadier, yaw-invariant);
+   * `iris` back-projects the two iris landmarks (simpler, easier to reason
+   * about, and the fallback when no transformation matrix is available).
+   */
+  poseSource: 'matrix' | 'iris'
+  /** Scales MediaPipe's virtual-camera units to metres. Set by calibration. */
+  metersPerUnit: number
+  /** Forward prediction, in ms, to offset pipeline latency. 0 disables it. */
+  predictMs: number
   /** Interpupillary distance. Adult mean ≈ 63mm; this sets the depth scale. */
   ipdMm: number
   /** Focal length of the webcam in pixels, divided by the video width. */
@@ -59,6 +71,15 @@ export interface Settings {
   autoRotate: boolean
   showRoom: boolean
 
+  // ── Splat placement ───────────────────────────────────────────────────────
+  // Applied on top of each capture's preset. Captures arrive in arbitrary
+  // units and orientation, so these exist mainly to make a pasted URL usable.
+  splatScale: number
+  splatYawDeg: number
+  splatPitchDeg: number
+  splatHeightM: number
+  splatDistanceM: number
+
   // ── Debug ─────────────────────────────────────────────────────────────────
   showDebug: boolean
   showVideo: boolean
@@ -77,6 +98,13 @@ export const DEFAULT_SETTINGS: Settings = {
   cameraOffsetZMm: 0,
 
   headSource: 'pointer',
+  poseSource: 'matrix',
+  // 0.01 would be right if MediaPipe's virtual camera matched the real one;
+  // it doesn't, so calibration exists. This is a reasonable starting guess.
+  metersPerUnit: 0.0125,
+  // Roughly the measured camera-to-photon latency of the pipeline. Short
+  // enough to stay well inside the range where prediction beats lag.
+  predictMs: 45,
   ipdMm: 63,
   focalNorm: 0.85,
   mirrorCamera: true,
@@ -97,6 +125,12 @@ export const DEFAULT_SETTINGS: Settings = {
   modelScale: 1,
   autoRotate: false,
   showRoom: true,
+
+  splatScale: 1,
+  splatYawDeg: 0,
+  splatPitchDeg: 0,
+  splatHeightM: 0,
+  splatDistanceM: 0,
 
   showDebug: false,
   showVideo: true,

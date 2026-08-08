@@ -47,22 +47,29 @@ The defining property — and what `test/offAxis.test.ts` checks — is that the
 of the physical window project to the four corners of the viewport from *any* eye
 position. That is what nails the virtual world to the glass.
 
-**2. Head tracking** (`src/core/headTracker.ts`, `src/core/pinhole.ts`)
+**2. Head tracking** (`src/core/headTracker.ts`, `headPose.ts`, `pinhole.ts`)
 
-MediaPipe's Face Landmarker gives 478 landmarks per frame, including the iris centres.
-Two of those are a near-rigid pair whose real-world separation you already know — your
-interpupillary distance, about 63mm — so the pinhole relation gives distance directly:
+MediaPipe's Face Landmarker gives 478 landmarks per frame plus a metric head
+pose, and there are two ways to turn that into an eye position. The app has
+both, switchable under **Tracking → Estimator**:
 
-```
-z = interpupillaryDistance · focalLength / apparentSeparation
-```
+- **Face mesh** (default) reads MediaPipe's facial transformation matrix — a
+  rigid fit of the whole canonical face mesh to the detected one. Hundreds of
+  landmarks vote on a single 6-DoF pose, so noise largely cancels, and it is
+  yaw-invariant by construction.
+- **Iris** back-projects the two iris landmarks through the pinhole relation
+  `z = ipd · focal / separation`. Two points out of 478, so every pixel of
+  landmark noise lands on the output — but it is easy to reason about, and it
+  is the fallback when no transformation matrix is available.
 
-and the midpoint of the pair back-projects to give x and y.
+Both need exactly one scale factor calibrated, for the same underlying reason:
+MediaPipe estimates its pose against an undocumented virtual camera whose field
+of view isn't your webcam's, and a webcam doesn't report its focal length. One
+measurement fixes either.
 
-The apparent separation is measured in **3D**, not 2D. When you turn your head the
-projected gap between the irises narrows, and a 2D measurement would read that as you
-having moved a foot backwards. MediaPipe's per-landmark `z` is on roughly the same scale
-as `x`, so including it makes the estimate nearly yaw-invariant.
+The iris estimator measures separation in **3D**, not 2D — when you turn your
+head the projected gap between the irises narrows, and a 2D measurement reads
+that as having moved a foot backwards.
 
 **3. Smoothing** (`src/core/oneEuro.ts`)
 
@@ -71,6 +78,27 @@ here: a fixed low-pass filter strong enough to kill the shimmer when you sit sti
 smears the geometry when you lunge sideways, which is exactly the moment the illusion
 needs to be crisp. The [1€ filter](https://gery.casiez.net/1euro/) adapts its cutoff to
 speed — heavy smoothing when slow, almost none when fast.
+
+**4. Latency compensation** (`src/core/predict.ts`)
+
+By the time a head position reaches the screen it has been through camera
+exposure, USB transfer, ~10–20ms of neural network, a smoothing filter that lags
+by design, a render and a display refresh. That total is typically 60–100ms, and
+this illusion is unusually sensitive to it — the scene should feel welded to the
+room, and lag makes it feel dragged along behind your head.
+
+So detection runs off `requestVideoFrameCallback` rather than the render loop.
+That fires once per *camera* frame, so no frame is processed twice or skipped,
+and its metadata carries the frame's capture timestamp — the only way to measure
+the pipeline's real latency instead of guessing. The debug overlay shows the
+measured figure.
+
+That measurement then drives a short forward extrapolation of head velocity.
+The literature is consistent that this is worth doing but only over short
+horizons: predicting more than a couple of hundred milliseconds overshoots
+visibly on direction changes, which reads worse than the lag it removed. Hence
+the clamp, and hence the default of 45ms. **Tracking → Latency compensation**
+turns it down or off.
 
 ## Calibration
 
@@ -81,12 +109,12 @@ The illusion is geometry, not guesswork. Three numbers have to match reality, an
 | --- | --- |
 | **Screen diagonal** | Sets the physical size of the projection window. Wrong here and the world shears as you move. |
 | **Camera above screen** | Distance from the top edge of the *picture* to the webcam lens. Wrong here and vertical parallax is offset. |
-| **Webcam focal length** | Sets the depth scale. Don't guess it — use the measurement below. |
+| **Distance scale** | Sets the depth scale for whichever estimator is active. Don't guess it — use the measurement below. |
 
-To measure focal length: start the camera, sit at a distance you can actually measure with
-a tape, type that distance into **Measure at**, and press **Set**. That solves for the
-focal length from the iris separation the tracker is currently seeing, which is far more
-reliable than trying to look up your webcam's field of view.
+To measure it: start the camera, sit at a distance you can actually measure with a tape,
+type that distance into **Measure at**, and press **Set**. That solves the active
+estimator's single unknown scale factor from what the tracker is seeing right now, which
+is far more reliable than trying to look up your webcam's field of view.
 
 Check your work with the **Infinite Tunnel** scene. Its frames are concentric with the
 window and exactly its size, so when calibration is right they stay nested and square no
@@ -98,18 +126,21 @@ Two more things affect accuracy:
   window sits on your display, from `window.screenX/screenY` and the height of the browser
   chrome. It is usually close. On a multi-monitor setup it can be well off — switch
   **Canvas position** to "Fills screen" and go fullscreen.
-- **Your actual eye spacing.** The 63mm default is an adult mean. If the reported distance
-  is consistently off by a fixed percentage, this is the knob.
+- **Your actual eye spacing.** The 63mm default is an adult mean. It only affects the iris
+  estimator; if its reported distance is off by a fixed percentage, this is the knob.
 
 ## Scenes
 
-**Places** — real-scale outdoor worlds, seen through a hole in a wall:
+**Places** — real captured locations, loaded as 3D Gaussian splats:
 
 | | |
 | --- | --- |
-| **Meadow** | A grass field under an open sky, with wind through the blades. |
-| **Shoreline** | Open water to the horizon, with the sun on the swell. |
-| **Pine Ridge** | Conifers fading into morning mist. |
+| **Valley** | An open landscape with a big depth range. The best parallax of the set. |
+| **Snow Street** | A street after snowfall — strong near-to-far structure down the road. |
+
+Plus **Load a capture by URL** in the Library, which takes any `.spz`, `.ply`,
+`.splat` or `.ksplat` served with CORS. That box is the real feature; the two
+built-ins are a starting point.
 
 **Worlds** — constructed or abstract, filling the aperture directly:
 
@@ -118,36 +149,42 @@ Two more things affect accuracy:
 | **Portal Room** | A lit box behind the glass with objects scattered through its depth. |
 | **Infinite Tunnel** | Concentric frames rushing past. Doubles as the calibration target. |
 | **Top-Down Arena** | A game level as a tilted diorama. **WASD** to drive. |
-| **Star Field** | Pure parallax — no occlusion, no shading, no familiar objects. If depth reads here, the tracking is doing real work. |
-| **Sample models** | Procedural objects on a pedestal, for checking the model viewer without uploading anything. |
+| **Star Field** | Pure parallax — no occlusion, no shading, no familiar objects. |
+| **Sample models** | Procedural objects on a pedestal, for checking the model viewer. |
 
-### Why the places are built the way they are
+### Why splats, and not something else
 
-They're rendered at **true scale** — grass in centimetres, treeline at a hundred metres,
-aperture 30cm of hole half a metre from your eye. That is the difference between "a window
-onto somewhere" and "a small model of somewhere", and it has a consequence worth knowing:
-almost all the parallax comes from *near* geometry. Distant hills barely shift when you
-lean, exactly as they don't at a real window.
+A 360° photo has no parallax at all: every pixel sits at infinity, so leaning
+does nothing and the illusion dies on contact. A photogrammetry mesh has real
+depth but bakes away the view-dependent shading — reflections, foliage, glass —
+that makes a place look like a place. A Gaussian splat keeps both, which is why
+it's the representation used here.
 
-Which is why each of the three earns its depth differently. The meadow uses near geometry —
-blades a few metres out sweeping across the field behind them. Pine Ridge uses occlusion —
-trunks at every distance sliding across each other. The shore has neither, so it leans on
-the swell: waves large near the shore and shrinking to nothing at the horizon, a texture
-gradient your visual system reads as distance without being told.
+It also happens to compose cleanly with head tracking. Spark computes each
+splat's screen footprint from `projectionMatrix[0][0]` and `[1][1]`, and the
+off-axis shear lives in the matrix's third column, leaving those focal terms
+untouched. Splats render correctly through a head-tracked frustum with no
+special handling.
 
-The single most valuable object in all three is the **window reveal** — the 8cm of wall
-thickness around the opening, four quads. A bare aperture reads as a screen showing a
-landscape. Give the opening some depth and lean, and the near jamb slides across the far
-one the way a real window does. You can turn it off under **View → Show frame & walls**; it
-is worth doing once, to see how much of the effect it was carrying.
+Spark is ~5MB, so it is loaded on demand the first time you open a capture.
 
-### Why the arena is the interesting one
+### Placing a capture
 
-A fixed top-down camera in a game loses everything behind a wall. The usual fixes are
-transparency hacks, dithering, or a camera the player has to fight. With head tracking you
-just lean, and the parallax shows you what's behind the wall — the occlusion problem
-solves itself, because the viewer's eye becomes a real degree of freedom instead of a
-fixed assumption baked into the render.
+Captures carry no agreed scale, up-axis or origin. One of these measured 916
+units across with its origin off to one side, which put the default viewpoint
+inside the point cloud. So the app derives a framing from the capture's own
+geometry — percentile bounds over a sample of splat centres, a 180° flip
+(COLMAP-style pipelines are Y-down, and Spark's own examples correct the same
+way), and a scale that maps the horizontal diagonal to about 22 metres.
+
+That gets most captures close. It will not get them all right: these are shells
+with a hard front boundary, and the band of good viewpoints can be narrow — on
+the Valley, 8.4m frames the whole landscape and 9.4m has you inside the
+mountain. **Placement** in the panel is how you fix the rest, and it is the
+first thing to reach for after pasting a URL.
+
+Good sources: [SuperSplat gallery](https://superspl.at/), [Polycam](https://poly.cam/explore),
+or anything you capture yourself with a phone.
 
 ## Loading your own models
 
@@ -208,20 +245,22 @@ into `public/mediapipe/` — the app prefers a local copy when it finds one. Or 
 src/
   core/
     offAxis.ts       the projection math — the whole trick
-    pinhole.ts       landmarks -> eye position (dependency-free, unit tested)
-    headTracker.ts   webcam + MediaPipe, wrapping pinhole.ts
+    headPose.ts      MediaPipe's metric head pose (dependency-free, unit tested)
+    pinhole.ts       iris pair -> eye position (dependency-free, unit tested)
+    predict.ts       velocity extrapolation for latency (unit tested)
+    headTracker.ts   webcam + MediaPipe, driven by requestVideoFrameCallback
     oneEuro.ts       1€ filter
     screen.ts        physical display geometry, in metres
     viewer.ts        renderer, scene lifecycle, off-axis camera
-    modelLoader.ts   multi-file model loading
+    splatRuntime.ts  lazy loader for the Gaussian splat renderer
+    modelLoader.ts   multi-file mesh loading
     settings.ts      persisted state
   scenes/
-    outdoorKit.ts    sky, LOD ground, instanced grass, prop scattering
+    splatPlace.ts    captured places, with auto-framing
+    places.ts        the curated capture list
     reveal.ts        the window's wall thickness — the near-parallax anchor
-    noise.ts         value noise / fBm, shared by terrain and placement
-    meadow.ts shore.ts pineRidge.ts        real-scale places
     portalRoom.ts tunnel.ts arena.ts starfield.ts   constructed worlds
-    showcase.ts      pedestal scene used for uploads and sample models
+    showcase.ts      pedestal scene for uploads and sample models
   ui/                panel, controls, debug overlay (no framework)
 test/                node --test, no test runner dependency
 ```
@@ -267,6 +306,9 @@ plain `http://192.168.x.x` will not get you a camera.
 - Casiez, Roussel & Vogel — *1€ Filter* (CHI 2012)
 - [MediaPipe Face Landmarker](https://ai.google.dev/edge/mediapipe/solutions/vision/face_landmarker)
 - [three.js](https://threejs.org)
+- [Spark](https://sparkjs.dev) (World Labs) — the Gaussian splat renderer, MIT.
+  The built-in captures are its public demo assets, linked and credited in the
+  panel, never redistributed.
 
 Johnny Lee's 2007 Wii-remote head tracking demo is the ancestor of all of this.
 

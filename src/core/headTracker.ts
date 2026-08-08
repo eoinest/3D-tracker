@@ -5,19 +5,22 @@ import {
   type NormalizedLandmark,
 } from '@mediapipe/tasks-vision'
 
+import { calibrateMetersPerUnit, headPoseFromMatrix } from './headPose'
 import { OneEuroVec3 } from './oneEuro'
 import { eyeFromLandmarkPair } from './pinhole'
+import { VelocityPredictor } from './predict'
 import type { DisplayGeometry } from './screen'
 import type { Settings } from './settings'
 
 /**
  * Webcam face tracking → an eye position in display space (metres).
  *
- * Depth comes from apparent interpupillary distance: the iris landmarks are a
- * near-rigid pair of known real-world separation, so `z = ipd · f / d`. We take
- * the *3D* landmark separation rather than the 2D one, because when you turn
- * your head the projected distance between the irises shrinks and a 2D estimate
- * would read that as "you moved a foot backwards".
+ * Detection is driven by `requestVideoFrameCallback`, not by the render loop.
+ * That matters for more than tidiness: rVFC fires once per *camera* frame
+ * rather than once per display refresh, so no frame is ever processed twice or
+ * skipped, and its metadata carries the frame's capture timestamp — which is
+ * the only way to measure the pipeline's true latency instead of guessing at
+ * it. That measurement then drives the forward prediction in `predict.ts`.
  */
 
 const MODEL_URL =
@@ -32,22 +35,27 @@ const CANTHUS_LEFT = 263
 /** Outer canthal distance ÷ interpupillary distance, for the no-iris fallback. */
 const CANTHAL_RATIO = 1.43
 
+/** How long a face may go missing before the scene recentres. */
+const FACE_HOLD_MS = 500
+
 export type TrackerState = 'idle' | 'starting' | 'running' | 'error'
 
 export interface HeadSample {
-  /** Eye midpoint in display space (metres). Smoothed. */
+  /** Eye midpoint in display space (metres). Smoothed and predicted. */
   x: number
   y: number
   z: number
-  /** Same point before the 1€ filter — useful for judging jitter. */
+  /** Same point before filtering — useful for judging jitter. */
   rawX: number
   rawY: number
   rawZ: number
   /** Eye midpoint in normalised image coords, for the debug overlay. */
   u: number
   v: number
-  /** Apparent eye separation in pixels; the raw depth signal. */
+  /** Apparent eye separation in pixels; the iris estimator's depth signal. */
   separationPx: number
+  /** Which estimator produced this sample. */
+  source: 'matrix' | 'iris'
   timestampMs: number
 }
 
@@ -59,15 +67,28 @@ export class HeadTracker {
   lastResult: FaceLandmarkerResult | null = null
   /** Face detections per second, smoothed. */
   detectFps = 0
+  /**
+   * Measured camera-to-detection latency in milliseconds, smoothed.
+   * Only available where the browser reports `captureTime`.
+   */
+  latencyMs = 0
+  /** Head speed in m/s, from the predictor. */
+  speed = 0
 
   private landmarker: FaceLandmarker | null = null
   private stream: MediaStream | null = null
-  private filter = new OneEuroVec3()
+  private readonly filter = new OneEuroVec3()
+  private readonly predictor = new VelocityPredictor()
   private sample: HeadSample | null = null
-  private lastVideoTime = -1
   private lastDetectMs = 0
   private lostSince: number | null = null
   private startPromise: Promise<void> | null = null
+  private frameHandle: number | null = null
+  private lastMatrix: number[] | null = null
+
+  /** Set by the owner so detection can use current settings and geometry. */
+  settings: Settings | null = null
+  geometry: DisplayGeometry | null = null
 
   constructor() {
     const video = document.createElement('video')
@@ -109,7 +130,9 @@ export class HeadTracker {
           facingMode: 'user',
           width: { ideal: 1280 },
           height: { ideal: 720 },
-          frameRate: { ideal: 60 },
+          // A faster camera is the cheapest latency win available: 60fps halves
+          // the worst-case wait for a fresh frame compared with 30.
+          frameRate: { ideal: 60, min: 24 },
         },
       })
       this.video.srcObject = this.stream
@@ -117,6 +140,7 @@ export class HeadTracker {
 
       this.landmarker = await createLandmarker(settings.delegate)
       this.state = 'running'
+      this.scheduleFrame()
     } catch (err) {
       this.state = 'error'
       this.error = describeError(err)
@@ -126,13 +150,18 @@ export class HeadTracker {
   }
 
   stop(): void {
+    if (this.frameHandle !== null && 'cancelVideoFrameCallback' in this.video) {
+      this.video.cancelVideoFrameCallback(this.frameHandle)
+    }
+    this.frameHandle = null
     this.landmarker?.close()
     this.landmarker = null
     this.stopStream()
     this.lastResult = null
+    this.lastMatrix = null
     this.sample = null
-    this.lastVideoTime = -1
     this.filter.reset()
+    this.predictor.reset()
     this.state = 'idle'
   }
 
@@ -151,52 +180,108 @@ export class HeadTracker {
   }
 
   /**
-   * Run detection if a fresh video frame is available, then return the current
-   * head position. Cheap to call every animation frame.
+   * Latest head position, already predicted forward to `nowMs`.
+   *
+   * Detection runs on its own schedule, so this is cheap to call every frame
+   * and returns a fresh extrapolation each time rather than a stale sample.
    */
-  update(settings: Settings, geom: DisplayGeometry, nowMs: number): HeadSample | null {
-    if (this.state !== 'running' || !this.landmarker) return null
+  currentSample(nowMs: number, settings: Settings): HeadSample | null {
+    const sample = this.sample
+    if (!sample) return null
 
-    const video = this.video
-    if (video.readyState < 2 || !video.videoWidth) return this.sample
+    // Prediction covers the gap between the frame the pose came from and the
+    // frame about to be drawn, plus the measured pipeline latency.
+    const leadMs = settings.predictMs > 0 ? settings.predictMs + (nowMs - sample.timestampMs) : 0
+    if (leadMs <= 0) return sample
+
+    const predicted = this.predictor.predict(sample, Math.min(leadMs, 250) / 1000)
+    return { ...sample, x: predicted.x, y: predicted.y, z: predicted.z }
+  }
+
+  private scheduleFrame(): void {
+    if (this.state !== 'running') return
+    if (!('requestVideoFrameCallback' in this.video)) {
+      // Safari < 15.4 and some embedded webviews. Fall back to polling at
+      // display rate; detection then dedupes on currentTime.
+      this.frameHandle = window.setTimeout(() => this.onFrame(performance.now(), null), 16)
+      return
+    }
+    this.frameHandle = this.video.requestVideoFrameCallback((now, metadata) => {
+      this.onFrame(now, metadata)
+    })
+  }
+
+  private onFrame(nowMs: number, metadata: VideoFrameCallbackMetadata | null): void {
+    if (this.state !== 'running' || !this.landmarker) return
+
+    const settings = this.settings
+    const geometry = this.geometry
+    if (!settings || !geometry) {
+      this.scheduleFrame()
+      return
+    }
 
     const minInterval = 1000 / Math.max(1, settings.trackFps)
-    const isNewFrame = video.currentTime !== this.lastVideoTime
-    if (!isNewFrame || nowMs - this.lastDetectMs < minInterval) return this.sample
+    if (nowMs - this.lastDetectMs < minInterval) {
+      this.scheduleFrame()
+      return
+    }
 
-    this.lastVideoTime = video.currentTime
     const dt = nowMs - this.lastDetectMs
     this.lastDetectMs = nowMs
     if (dt > 0 && dt < 1000) this.detectFps += (1000 / dt - this.detectFps) * 0.1
 
+    if (this.video.readyState >= 2 && this.video.videoWidth) {
+      this.detect(nowMs, metadata, settings, geometry)
+    }
+    this.scheduleFrame()
+  }
+
+  private detect(
+    nowMs: number,
+    metadata: VideoFrameCallbackMetadata | null,
+    settings: Settings,
+    geometry: DisplayGeometry,
+  ): void {
     let result: FaceLandmarkerResult
     try {
-      result = this.landmarker.detectForVideo(video, nowMs)
+      result = this.landmarker!.detectForVideo(this.video, nowMs)
     } catch {
-      // A transient detect failure (GPU context loss, resize race) shouldn't
-      // tear down tracking — just reuse the previous sample.
-      return this.sample
+      // A transient failure (GPU context loss, a resize race) shouldn't tear
+      // down tracking — reuse the previous sample.
+      return
     }
     this.lastResult = result
 
+    // captureTime is when the sensor grabbed the frame, so this is the real
+    // camera-to-here latency rather than an assumption.
+    if (metadata?.captureTime !== undefined) {
+      const measured = performance.now() - metadata.captureTime
+      if (measured >= 0 && measured < 500) {
+        this.latencyMs += (measured - this.latencyMs) * 0.1
+      }
+    }
+
     const landmarks = result.faceLandmarks?.[0]
     if (!landmarks || landmarks.length < 468) {
-      // Hold the last known position briefly so a blink or a quick occlusion
-      // doesn't snap the whole scene back to centre.
+      // Hold the last position briefly so a blink or a quick occlusion doesn't
+      // snap the whole scene back to centre.
       this.lostSince ??= nowMs
-      if (nowMs - this.lostSince > 500) {
+      if (nowMs - this.lostSince > FACE_HOLD_MS) {
         this.sample = null
+        this.lastMatrix = null
         this.filter.reset()
+        this.predictor.reset()
       }
-      return this.sample
+      return
     }
     this.lostSince = null
 
-    this.sample = this.landmarksToHead(landmarks, settings, geom, nowMs)
-    return this.sample
+    this.lastMatrix = result.facialTransformationMatrixes?.[0]?.data ?? null
+    this.sample = this.solve(landmarks, settings, geometry, nowMs)
   }
 
-  private landmarksToHead(
+  private solve(
     landmarks: NormalizedLandmark[],
     settings: Settings,
     geom: DisplayGeometry,
@@ -205,19 +290,45 @@ export class HeadTracker {
     const hasIris = landmarks.length >= 478
     const a = landmarks[hasIris ? IRIS_RIGHT : CANTHUS_RIGHT]
     const b = landmarks[hasIris ? IRIS_LEFT : CANTHUS_LEFT]
-    if (!a || !b) return this.sample
 
-    const raw = eyeFromLandmarkPair(a, b, {
-      videoWidth: this.video.videoWidth,
-      videoHeight: this.video.videoHeight,
-      // The no-iris fallback measures the outer eye corners, a wider baseline.
-      baselineM: (settings.ipdMm / 1000) * (hasIris ? 1 : CANTHAL_RATIO),
-      focalNorm: settings.focalNorm,
-      mirror: settings.mirrorCamera,
-      cameraXM: geom.cameraXM,
-      cameraYM: geom.cameraYM,
-      cameraZM: geom.cameraZM,
-    })
+    // Image-space eye midpoint, kept for the debug overlay regardless of which
+    // estimator ends up supplying the position.
+    const u = a && b ? (a.x + b.x) / 2 : 0.5
+    const v = a && b ? (a.y + b.y) / 2 : 0.5
+
+    let raw: { x: number; y: number; z: number } | null = null
+    let source: HeadSample['source'] = 'matrix'
+    let separationPx = 0
+
+    if (settings.poseSource === 'matrix' && this.lastMatrix) {
+      raw = headPoseFromMatrix(this.lastMatrix, {
+        metersPerUnit: settings.metersPerUnit,
+        mirror: settings.mirrorCamera,
+        cameraXM: geom.cameraXM,
+        cameraYM: geom.cameraYM,
+        cameraZM: geom.cameraZM,
+      })
+    }
+
+    if (!raw && a && b) {
+      const iris = eyeFromLandmarkPair(a, b, {
+        videoWidth: this.video.videoWidth,
+        videoHeight: this.video.videoHeight,
+        // The no-iris fallback measures the outer eye corners, a wider baseline.
+        baselineM: (settings.ipdMm / 1000) * (hasIris ? 1 : CANTHAL_RATIO),
+        focalNorm: settings.focalNorm,
+        mirror: settings.mirrorCamera,
+        cameraXM: geom.cameraXM,
+        cameraYM: geom.cameraYM,
+        cameraZM: geom.cameraZM,
+      })
+      if (iris) {
+        raw = { x: iris.x, y: iris.y, z: iris.z }
+        separationPx = iris.separationPx
+        source = 'iris'
+      }
+    }
+
     if (!raw) return this.sample
 
     this.filter.configure({
@@ -225,7 +336,13 @@ export class HeadTracker {
       beta: settings.smoothBeta,
       dCutoff: 1,
     })
-    const [x, y, z] = this.filter.filter(raw.x, raw.y, raw.z, nowMs / 1000)
+    const seconds = nowMs / 1000
+    const [x, y, z] = this.filter.filter(raw.x, raw.y, raw.z, seconds)
+
+    // Feed the predictor the *smoothed* track: extrapolating raw samples
+    // amplifies exactly the jitter the filter just removed.
+    this.predictor.update(x, y, z, seconds)
+    this.speed = this.predictor.speed
 
     return {
       x,
@@ -234,25 +351,31 @@ export class HeadTracker {
       rawX: raw.x,
       rawY: raw.y,
       rawZ: raw.z,
-      u: raw.u,
-      v: raw.v,
-      separationPx: raw.separationPx,
+      u,
+      v,
+      separationPx,
+      source,
       timestampMs: nowMs,
     }
   }
 
   /**
-   * Solve for the camera's focal length from a known viewing distance.
+   * Solves the active estimator's one free scale factor from a known distance.
    * Far more reliable than asking someone to guess their webcam's field of view.
    */
-  calibrateFocalFromDistance(distanceM: number, settings: Settings): number | null {
+  calibrate(distanceM: number, settings: Settings): { key: 'metersPerUnit' | 'focalNorm'; value: number } | null {
+    if (!(distanceM > 0)) return null
+
+    if (settings.poseSource === 'matrix' && this.lastMatrix) {
+      const value = calibrateMetersPerUnit(this.lastMatrix, distanceM)
+      return value === null ? null : { key: 'metersPerUnit', value }
+    }
+
     const sample = this.sample
-    if (!sample || !(distanceM > 0)) return null
     const vw = this.video.videoWidth
-    if (!vw) return null
-    const baselineM = settings.ipdMm / 1000
-    const focalPx = (distanceM * sample.separationPx) / baselineM
-    return focalPx / vw
+    if (!sample || !sample.separationPx || !vw) return null
+    const focalPx = (distanceM * sample.separationPx) / (settings.ipdMm / 1000)
+    return { key: 'focalNorm', value: focalPx / vw }
   }
 }
 
@@ -269,7 +392,9 @@ async function createLandmarker(delegate: Settings['delegate']): Promise<FaceLan
     minFacePresenceConfidence: 0.4,
     minTrackingConfidence: 0.4,
     outputFaceBlendshapes: false,
-    outputFacialTransformationMatrixes: false,
+    // The metric head pose. Costs almost nothing on top of the landmarks and
+    // is a far steadier position estimate than two iris points.
+    outputFacialTransformationMatrixes: true,
   }
 
   try {

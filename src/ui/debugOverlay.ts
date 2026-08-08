@@ -125,14 +125,19 @@ export class DebugOverlay {
     const { tracker, geometry, eye, sample, renderFps } = input
     const cm = (v: number): string => `${(v * 100).toFixed(1)}`
 
+    const running = tracker.state === 'running'
     const rows: [string, string][] = [
       ['eye x / y', `${cm(eye.x)} / ${cm(eye.y)} cm`],
       ['distance', `${cm(eye.z)} cm`],
       ['window', `${cm(geometry.windowWidthM)} × ${cm(geometry.windowHeightM)} cm`],
       ['offset', `${cm(geometry.windowCenterXM)} / ${cm(geometry.windowCenterYM)} cm`],
       ['render', `${renderFps.toFixed(0)} fps`],
-      ['detect', tracker.state === 'running' ? `${tracker.detectFps.toFixed(0)} fps` : '—'],
-      ['iris sep', sample ? `${sample.separationPx.toFixed(1)} px` : '—'],
+      ['detect', running ? `${tracker.detectFps.toFixed(0)} fps` : '—'],
+      // Measured from the frame's capture timestamp, not assumed.
+      ['latency', running && tracker.latencyMs ? `${tracker.latencyMs.toFixed(0)} ms` : '—'],
+      ['head speed', running ? `${tracker.speed.toFixed(2)} m/s` : '—'],
+      ['estimator', sample ? sample.source : '—'],
+      ['iris sep', sample?.separationPx ? `${sample.separationPx.toFixed(1)} px` : '—'],
     ]
 
     this.stats.replaceChildren(

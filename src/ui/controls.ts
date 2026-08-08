@@ -54,6 +54,56 @@ export class ControlFactory {
     )
   }
 
+  /**
+   * Slider on a log scale.
+   *
+   * Captures arrive at scales spanning orders of magnitude — a phone scan may
+   * be in metres, a photogrammetry rig in arbitrary units a hundredth the size.
+   * A linear slider spends 90% of its travel in a range no capture ever needs.
+   */
+  logSlider(options: {
+    key: NumericKey
+    label: string
+    min: number
+    max: number
+    hint?: string
+    format?: (value: number) => string
+  }): HTMLElement {
+    const { key, label, min, max, hint, format = (v) => `${v.toFixed(3)}×` } = options
+    const logMin = Math.log10(min)
+    const logMax = Math.log10(max)
+
+    const readout = h('output', { class: 'ctl-value' })
+    const input = h('input', {
+      type: 'range',
+      min: 0,
+      max: 1000,
+      step: 1,
+      oninput: () => {
+        const t = Number(input.value) / 1000
+        const value = 10 ** (logMin + t * (logMax - logMin))
+        this.store.set(key, value as Settings[NumericKey])
+      },
+    })
+
+    const sync = (): void => {
+      const value = Math.min(max, Math.max(min, this.store.values[key]))
+      const t = (Math.log10(value) - logMin) / (logMax - logMin)
+      input.value = String(Math.round(t * 1000))
+      readout.textContent = format(this.store.values[key])
+    }
+    this.refresh.push(sync)
+    sync()
+
+    return h(
+      'label',
+      { class: 'ctl ctl-slider' },
+      h('span', { class: 'ctl-head' }, h('span', { class: 'ctl-label' }, label), readout),
+      input,
+      hint ? h('small', { class: 'ctl-hint' }, hint) : null,
+    )
+  }
+
   number(options: {
     key: NumericKey
     label: string

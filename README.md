@@ -186,6 +186,20 @@ first thing to reach for after pasting a URL.
 Good sources: [SuperSplat gallery](https://superspl.at/), [Polycam](https://poly.cam/explore),
 or anything you capture yourself with a phone.
 
+### The window reveal, and why it's thin
+
+Capture scenes frame the aperture with a **reveal** — the wall thickness around the
+opening. It does real work for a few quads: a bare aperture reads as a screen showing
+a landscape, whereas an opening with depth has a near jamb that slides across the far
+one when you lean, exactly as a real window does.
+
+It has to stay thin. The reveal covers `depth / (viewingDistance + depth)` of every
+edge, a fraction that doesn't depend on screen size at all. At 8.5cm of wall and a
+55cm viewing distance that is 13% per side — better than a quarter of the display —
+at which point it stops reading as a window reveal and starts reading as the app
+failing to fill the screen. It is a 2.2cm bevel for that reason.
+**View → Show frame & walls** turns it off entirely.
+
 ## Loading your own models
 
 Drop files anywhere on the page, or use the upload box in the library.

@@ -55,6 +55,19 @@ export const NEUTRAL_PLACEMENT: SplatPlacement = {
   offsetZM: 0,
 }
 
+/**
+ * Wall thickness around the aperture, in metres.
+ *
+ * The reveal is visible because the frustum at its back edge is wider than the
+ * aperture, so it covers `depth / (eyeDistance + depth)` of every edge —
+ * a fraction that does not depend on screen size. At 8.5cm and a 55cm viewing
+ * distance that is 13% per side, better than a quarter of the display, and it
+ * stops reading as a window reveal and starts reading as the app failing to
+ * fill the screen. Keep it to a bevel: still a real near-field parallax
+ * anchor, no longer a picture frame around the view.
+ */
+const REVEAL_DEPTH_M = 0.022
+
 /** How wide the framed capture should be, in metres. */
 const TARGET_SPAN_M = 22
 /** Eye height above the capture's floor, in metres. */
@@ -130,7 +143,11 @@ function createSplatPlace(meta: SplatPlaceMeta, ctx: SceneContext): SceneInstanc
   pivot.name = 'splat-pivot'
   root.add(pivot)
 
-  const reveal = createWindowReveal({ depthM: 0.085, color: 0xd8d2c6, sillColor: 0xb0a695 })
+  const reveal = createWindowReveal({
+    depthM: REVEAL_DEPTH_M,
+    color: 0x9a9287,
+    sillColor: 0x7d766b,
+  })
   reveal.layout(ctx)
   root.add(reveal.group)
 
